@@ -144,7 +144,7 @@ class TeamsCostCenterManager:
             cost_center = self.team_mappings.get(team_key)
             
             if not cost_center:
-                self.logger.warning(
+                self.logger.debug(
                     f"No mapping found for team {team_key} in manual mode. "
                     "Team will be skipped. Add mapping to config.teams.team_mappings"
                 )

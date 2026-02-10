@@ -421,7 +421,7 @@ class GitHubCopilotManager:
         Returns:
             List of team dictionaries with id, name, slug, description, etc.
         """
-        self.logger.info(f"Fetching teams for organization: {org}")
+        self.logger.debug(f"Fetching teams for organization: {org}")
         url = f"{self.base_url}/orgs/{org}/teams"
         
         all_teams = []
@@ -444,7 +444,7 @@ class GitHubCopilotManager:
                     break
                 
                 all_teams.extend(teams)
-                self.logger.info(f"Fetched page {page} with {len(teams)} teams")
+                self.logger.debug(f"Fetched page {page} with {len(teams)} teams")
                 
                 page += 1
                 
@@ -456,7 +456,7 @@ class GitHubCopilotManager:
                 self.logger.error(f"Failed to fetch teams for org {org}: {str(e)}")
                 break
         
-        self.logger.info(f"Total teams found in {org}: {len(all_teams)}")
+        self.logger.debug(f"Total teams found in {org}: {len(all_teams)}")
         return all_teams
     
     def get_team_members(self, org: str, team_slug: str) -> List[Dict]:
