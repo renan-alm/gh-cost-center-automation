@@ -74,6 +74,10 @@ func (c *Client) GetAllActiveCostCenters() (map[string]string, error) {
 	for _, cc := range resp.CostCenters {
 		if cc.State == "active" && cc.Name != "" && cc.ID != "" {
 			active[cc.Name] = cc.ID
+			// Populate cache with every active cost center.
+			if c.ccCache != nil {
+				_ = c.ccCache.Set(cc.Name, cc.ID, cc.Name)
+			}
 		}
 	}
 	c.log.Debug("Found active cost centers", "active", len(active), "total", len(resp.CostCenters))
@@ -112,6 +116,14 @@ func (c *Client) GetCostCenterMembers(id string) ([]string, error) {
 // center already exists (409 Conflict) it attempts to extract the existing UUID
 // from the error message.  If that fails it falls back to searching by name.
 func (c *Client) CreateCostCenter(name string) (string, error) {
+	// Check cache first.
+	if c.ccCache != nil {
+		if entry, ok := c.ccCache.Get(name); ok {
+			c.log.Debug("Cost center found in cache", "name", name, "id", entry.ID)
+			return entry.ID, nil
+		}
+	}
+
 	url := c.enterpriseURL("/settings/billing/cost-centers")
 	body := map[string]string{"name": name}
 
@@ -119,6 +131,10 @@ func (c *Client) CreateCostCenter(name string) (string, error) {
 	_, err := c.doJSON(http.MethodPost, url, body, &resp)
 	if err == nil {
 		c.log.Info("Created cost center", "name", name, "id", resp.ID)
+		// Update cache with newly created cost center.
+		if c.ccCache != nil {
+			_ = c.ccCache.Set(name, resp.ID, name)
+		}
 		return resp.ID, nil
 	}
 
@@ -129,6 +145,10 @@ func (c *Client) CreateCostCenter(name string) (string, error) {
 
 		if m := uuidFromConflictRe.FindStringSubmatch(apiErr.Body); len(m) == 2 {
 			c.log.Info("Extracted existing cost center ID from API response", "id", m[1])
+			// Update cache with extracted ID.
+			if c.ccCache != nil {
+				_ = c.ccCache.Set(name, m[1], name)
+			}
 			return m[1], nil
 		}
 
@@ -146,6 +166,15 @@ func (c *Client) CreateCostCenterWithPreload(name string, activeMap map[string]s
 	if id, ok := activeMap[name]; ok {
 		c.log.Debug("Found cost center in preload map", "name", name, "id", id)
 		return id, nil
+	}
+
+	// Check file-based cache before making API call.
+	if c.ccCache != nil {
+		if entry, ok := c.ccCache.Get(name); ok {
+			c.log.Debug("Found cost center in cache", "name", name, "id", entry.ID)
+			activeMap[name] = entry.ID
+			return entry.ID, nil
+		}
 	}
 
 	id, err := c.CreateCostCenter(name)

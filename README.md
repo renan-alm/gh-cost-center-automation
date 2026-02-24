@@ -9,6 +9,75 @@ Automate GitHub Copilot license cost center assignments for your enterprise with
 
 - **PRU-Based Mode**: Simple two-tier model (PRU overages allowed/not allowed)
 - **Teams-Based Mode**: Automatic assignment based on GitHub team membership
+- **Repository-Based Mode**: Assign repos to cost centers via custom properties
+
+## Go CLI (gh extension)
+
+The recommended way to use this tool is as a GitHub CLI extension.
+
+### Installation
+
+```bash
+gh extension install renan-alm/gh-cost-center
+```
+
+### Usage
+
+```bash
+# Preview PRU-based assignments
+gh cost-center assign --mode plan
+
+# Apply PRU-based assignments (skip confirmation)
+gh cost-center assign --mode apply --yes
+
+# Teams-based mode
+gh cost-center assign --teams --mode plan
+gh cost-center assign --teams --mode apply --yes
+
+# Repository-based mode
+gh cost-center assign --repo --mode plan
+gh cost-center assign --repo --mode apply --yes
+
+# Auto-create cost centers and budgets
+gh cost-center assign --mode apply --yes --create-cost-centers --create-budgets
+
+# View configuration
+gh cost-center config
+
+# List Copilot license holders
+gh cost-center list-users
+
+# Generate summary report
+gh cost-center report
+gh cost-center report --teams
+
+# Manage cost center cache
+gh cost-center cache --stats
+gh cost-center cache --clear
+gh cost-center cache --cleanup
+
+# Show version
+gh cost-center version
+```
+
+### Cache
+
+The CLI caches cost center lookups in `.cache/cost_centers.json` to reduce API
+calls on repeated runs.  Cache entries expire after 24 hours.
+
+### Configuration
+
+Copy the example configuration and edit it:
+
+```bash
+cp config/config.example.yaml config/config.yaml
+```
+
+See `gh cost-center config` for the current resolved configuration.
+
+---
+
+## Python Version (Legacy)
 
 ## 🚀 Quick Start (5 minutes)
 

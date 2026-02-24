@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/renan-alm/gh-cost-center/internal/cache"
 	"github.com/renan-alm/gh-cost-center/internal/config"
 )
 
@@ -43,6 +44,7 @@ type Client struct {
 	baseURL    string
 	enterprise string
 	log        *slog.Logger
+	ccCache    *cache.Cache // optional cost center cache
 }
 
 // NewClient creates a Client from a loaded config.Manager.
@@ -66,6 +68,13 @@ func NewClient(cfg *config.Manager, logger *slog.Logger) (*Client, error) {
 		enterprise: cfg.Enterprise,
 		log:        logger,
 	}, nil
+}
+
+// SetCache attaches a cost center cache to the client.  When set, cost
+// center lookups check the cache before making API calls and update the
+// cache when the API responds.
+func (c *Client) SetCache(cc *cache.Cache) {
+	c.ccCache = cc
 }
 
 // APIError is returned when the GitHub API responds with a non-2xx status

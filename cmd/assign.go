@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/renan-alm/gh-cost-center/internal/cache"
 	"github.com/renan-alm/gh-cost-center/internal/github"
 	"github.com/renan-alm/gh-cost-center/internal/pru"
 	"github.com/renan-alm/gh-cost-center/internal/repository"
@@ -97,6 +98,19 @@ func runAssign(cmd *cobra.Command, _ []string) error {
 	return runPRUAssign(cmd)
 }
 
+// attachCache creates a file-based cost center cache and attaches it to the
+// GitHub client.  Errors during cache creation are logged but do not abort
+// the run — the client will simply skip caching.
+func attachCache(client *github.Client, logger *slog.Logger) {
+	cc, err := cache.New("", logger)
+	if err != nil {
+		logger.Warn("Could not initialise cost center cache, continuing without cache", "error", err)
+		return
+	}
+	client.SetCache(cc)
+	logger.Debug("Cost center cache attached", "path", cc.FilePath())
+}
+
 // runPRUAssign implements the default PRU-based assignment flow.
 func runPRUAssign(cmd *cobra.Command) error {
 	logger := slog.Default()
@@ -118,6 +132,7 @@ func runPRUAssign(cmd *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("creating GitHub client: %w", err)
 	}
+	attachCache(client, logger)
 
 	// Fetch Copilot users.
 	logger.Info("Fetching Copilot license holders...")
@@ -356,6 +371,7 @@ func runTeamsAssign(_ *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("creating GitHub client: %w", err)
 	}
+	attachCache(client, logger)
 
 	// Enable auto-creation if flag was passed.
 	if assignCreateCC {
@@ -410,6 +426,7 @@ func runRepoAssign(_ *cobra.Command) error {
 	if err != nil {
 		return fmt.Errorf("creating GitHub client: %w", err)
 	}
+	attachCache(client, logger)
 
 	// Initialize repository manager.
 	mgr, err := repository.NewManager(cfgManager, client, logger)
