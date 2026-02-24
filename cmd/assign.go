@@ -11,6 +11,7 @@ import (
 
 	"github.com/renan-alm/gh-cost-center/internal/github"
 	"github.com/renan-alm/gh-cost-center/internal/pru"
+	"github.com/renan-alm/gh-cost-center/internal/teams"
 )
 
 var (
@@ -86,8 +87,7 @@ func runAssign(cmd *cobra.Command, _ []string) error {
 	}
 
 	if assignTeams {
-		// TODO: Wire teams-based mode in PR 5
-		return fmt.Errorf("teams-based mode is not yet implemented")
+		return runTeamsAssign(cmd)
 	}
 	if assignRepo {
 		// TODO: Wire repository-based mode in PR 6
@@ -345,6 +345,49 @@ func logAssignmentResults(results map[string]map[string]bool, logger *slog.Logge
 			"count", totalSuccessful,
 		)
 	}
+}
+
+// runTeamsAssign implements the teams-based assignment flow.
+func runTeamsAssign(_ *cobra.Command) error {
+	logger := slog.Default()
+
+	// Create GitHub API client.
+	client, err := github.NewClient(cfgManager, logger)
+	if err != nil {
+		return fmt.Errorf("creating GitHub client: %w", err)
+	}
+
+	// Enable auto-creation if flag was passed.
+	if assignCreateCC {
+		cfgManager.EnableAutoCreation()
+	}
+
+	// Initialize teams manager.
+	mgr := teams.NewManager(cfgManager, client, logger)
+
+	// Show configuration.
+	mgr.PrintConfigSummary(assignCheckCurrentCC, assignCreateBudgets)
+
+	// Sync assignments (plan or apply).
+	ignoreCurrentCC := !assignCheckCurrentCC
+	results, err := mgr.SyncTeamAssignments(assignMode, ignoreCurrentCC)
+	if err != nil {
+		return fmt.Errorf("syncing team assignments: %w", err)
+	}
+
+	if assignMode == "apply" {
+		if !assignYes && results == nil {
+			// In apply mode without --yes, SyncTeamAssignments would have
+			// already applied.  Log completion.
+			logger.Info("Teams assignment completed")
+		}
+		if results != nil {
+			logAssignmentResults(results, logger)
+		}
+	}
+
+	logger.Info("Teams assign command completed successfully")
+	return nil
 }
 
 // filterUsersByLogin filters a user slice to only those whose login appears in
