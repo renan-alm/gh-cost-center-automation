@@ -8,6 +8,7 @@ import (
 
 	"github.com/renan-alm/gh-cost-center/internal/github"
 	"github.com/renan-alm/gh-cost-center/internal/pru"
+	"github.com/renan-alm/gh-cost-center/internal/teams"
 )
 
 var reportTeams bool
@@ -34,8 +35,7 @@ func init() {
 
 func runReport(_ *cobra.Command, _ []string) error {
 	if reportTeams {
-		// TODO: Wire teams-aware report in PR 5
-		return fmt.Errorf("teams-aware reporting is not yet implemented")
+		return runTeamsReport()
 	}
 
 	logger := slog.Default()
@@ -64,6 +64,27 @@ func runReport(_ *cobra.Command, _ []string) error {
 		fmt.Printf("%s: %d users\n", cc, count)
 		logger.Info("Cost center", "id", cc, "users", count)
 	}
+
+	return nil
+}
+
+// runTeamsReport generates a teams-aware cost center report.
+func runTeamsReport() error {
+	logger := slog.Default()
+
+	client, err := github.NewClient(cfgManager, logger)
+	if err != nil {
+		return fmt.Errorf("creating GitHub client: %w", err)
+	}
+
+	mgr := teams.NewManager(cfgManager, client, logger)
+
+	summary, err := mgr.GenerateSummary()
+	if err != nil {
+		return fmt.Errorf("generating teams summary: %w", err)
+	}
+
+	summary.Print(cfgManager.Enterprise)
 
 	return nil
 }
