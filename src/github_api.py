@@ -63,7 +63,7 @@ class GitHubCopilotManager:
     
     def _make_request(self, url: str, params: Optional[Dict] = None, method: str = 'GET', 
                      json: Optional[Dict] = None, custom_headers: Optional[Dict] = None) -> Dict:
-        """Make a GitHub API request with error handling."""
+        """Make an API request with error handling and rate limit management."""
         try:
             # Prepare headers
             headers = {}

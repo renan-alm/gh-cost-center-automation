@@ -95,3 +95,4 @@ scripts/cleanup_*.py
 scripts/test_*.py
 scripts/check_*.py
 scripts/README_cleanup.md
+**/local-config.yaml**
