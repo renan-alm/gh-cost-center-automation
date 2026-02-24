@@ -11,6 +11,7 @@ import (
 
 	"github.com/renan-alm/gh-cost-center/internal/github"
 	"github.com/renan-alm/gh-cost-center/internal/pru"
+	"github.com/renan-alm/gh-cost-center/internal/repository"
 	"github.com/renan-alm/gh-cost-center/internal/teams"
 )
 
@@ -90,8 +91,7 @@ func runAssign(cmd *cobra.Command, _ []string) error {
 		return runTeamsAssign(cmd)
 	}
 	if assignRepo {
-		// TODO: Wire repository-based mode in PR 6
-		return fmt.Errorf("repository-based mode is not yet implemented")
+		return runRepoAssign(cmd)
 	}
 
 	return runPRUAssign(cmd)
@@ -365,6 +365,11 @@ func runTeamsAssign(_ *cobra.Command) error {
 	// Initialize teams manager.
 	mgr := teams.NewManager(cfgManager, client, logger)
 
+	// Wire budget creation if requested.
+	if assignCreateBudgets && cfgManager.BudgetsEnabled {
+		mgr.SetBudgetConfig(true, cfgManager.BudgetProducts)
+	}
+
 	// Show configuration.
 	mgr.PrintConfigSummary(assignCheckCurrentCC, assignCreateBudgets)
 
@@ -387,6 +392,67 @@ func runTeamsAssign(_ *cobra.Command) error {
 	}
 
 	logger.Info("Teams assign command completed successfully")
+	return nil
+}
+
+// runRepoAssign implements the repository-based assignment flow.
+func runRepoAssign(_ *cobra.Command) error {
+	logger := slog.Default()
+
+	// Determine organization name from config.
+	if len(cfgManager.TeamsOrganizations) == 0 {
+		return fmt.Errorf("repository mode requires at least one organization in teams.organizations config")
+	}
+	org := cfgManager.TeamsOrganizations[0]
+
+	// Create GitHub API client.
+	client, err := github.NewClient(cfgManager, logger)
+	if err != nil {
+		return fmt.Errorf("creating GitHub client: %w", err)
+	}
+
+	// Initialize repository manager.
+	mgr, err := repository.NewManager(cfgManager, client, logger)
+	if err != nil {
+		return fmt.Errorf("initializing repository manager: %w", err)
+	}
+
+	// Validate configuration.
+	if issues := mgr.ValidateConfiguration(); len(issues) > 0 {
+		for _, issue := range issues {
+			logger.Error("Configuration issue", "detail", issue)
+		}
+		return fmt.Errorf("invalid repository configuration: %d issues found", len(issues))
+	}
+
+	// Show config summary.
+	mgr.PrintConfigSummary(org)
+
+	// Confirmation in apply mode.
+	if assignMode == "apply" && !assignYes {
+		fmt.Print("\nProceed with APPLY? Type 'apply' to continue: ")
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			if strings.TrimSpace(strings.ToLower(scanner.Text())) != "apply" {
+				logger.Warn("Aborted by user")
+				return nil
+			}
+		}
+	}
+
+	// Run assignment.
+	createBudgets := assignCreateBudgets && cfgManager.BudgetsEnabled
+	summary, err := mgr.Run(org, assignMode, createBudgets)
+	if err != nil {
+		return fmt.Errorf("repository assignment failed: %w", err)
+	}
+
+	// Print summary.
+	if summary != nil {
+		summary.Print()
+	}
+
+	logger.Info("Repository assign command completed successfully")
 	return nil
 }
 

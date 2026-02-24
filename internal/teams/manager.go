@@ -36,6 +36,10 @@ type Manager struct {
 	mappings    map[string]string // team key -> CC name (manual mode)
 	removeUsers bool
 
+	// Budget creation support.
+	createBudgets  bool
+	budgetProducts map[string]config.ProductBudget
+
 	// Caches populated during a run.
 	teamsCache   map[string][]github.Team // org/enterprise -> teams
 	membersCache map[string][]string      // team-key -> usernames
@@ -58,6 +62,12 @@ func NewManager(cfg *config.Manager, client *github.Client, logger *slog.Logger)
 		membersCache: make(map[string][]string),
 		ccNameCache:  make(map[string]string),
 	}
+}
+
+// SetBudgetConfig enables budget creation for newly-created cost centers.
+func (m *Manager) SetBudgetConfig(enabled bool, products map[string]config.ProductBudget) {
+	m.createBudgets = enabled
+	m.budgetProducts = products
 }
 
 // PrintConfigSummary displays the teams mode configuration.
@@ -430,6 +440,11 @@ func (m *Manager) SyncTeamAssignments(mode string, ignoreCurrentCC bool) (map[st
 		if err != nil {
 			return nil, fmt.Errorf("ensuring cost centers exist: %w", err)
 		}
+
+		// Create budgets for newly-created cost centers.
+		if m.createBudgets && len(newlyCreated) > 0 {
+			m.createBudgetsForNewCCs(ccMap, newlyCreated)
+		}
 	}
 
 	// Convert assignments to use actual cost center IDs and deduplicate.
@@ -675,6 +690,58 @@ func (s *Summary) Print(enterprise string) {
 		sort.Strings(names)
 		for _, name := range names {
 			fmt.Printf("  %s: %d users\n", name, s.CostCenters[name])
+		}
+	}
+}
+
+// createBudgetsForNewCCs creates configured budgets for each newly-created
+// cost center.  Stops attempting if the budgets API is unavailable (404).
+func (m *Manager) createBudgetsForNewCCs(ccMap map[string]string, newlyCreated map[string]bool) {
+	if len(m.budgetProducts) == 0 {
+		m.log.Debug("No budget products configured, skipping budget creation")
+		return
+	}
+
+	m.log.Info("Creating budgets for newly-created cost centers",
+		"count", len(newlyCreated))
+
+	// Build reverse map: ccID -> ccName.
+	idToName := make(map[string]string, len(ccMap))
+	for name, id := range ccMap {
+		idToName[id] = name
+	}
+
+	budgetsDisabled := false
+	for ccID := range newlyCreated {
+		if budgetsDisabled {
+			break
+		}
+		ccName := idToName[ccID]
+		if ccName == "" {
+			ccName = ccID
+		}
+
+		m.log.Info("Creating budgets for cost center", "name", ccName)
+		for product, pc := range m.budgetProducts {
+			if !pc.Enabled {
+				continue
+			}
+			ok, err := m.client.CreateProductBudget(ccID, ccName, product, pc.Amount)
+			if err != nil {
+				if _, is404 := err.(*github.BudgetsAPIUnavailableError); is404 {
+					m.log.Warn("Budgets API unavailable, disabling further attempts",
+						"error", err)
+					budgetsDisabled = true
+					break
+				}
+				m.log.Error("Failed to create budget",
+					"product", product, "cost_center", ccName, "error", err)
+				continue
+			}
+			if ok {
+				m.log.Info("Budget created",
+					"product", product, "cost_center", ccName, "amount", pc.Amount)
+			}
 		}
 	}
 }
