@@ -2,7 +2,7 @@
 github:
   # Enterprise name is required. Prefer setting via environment var GITHUB_ENTERPRISE.
   # Leave as placeholder or blank if supplying via environment.
-  enterprise: ""
+  enterprise: "eficode-partner-demo"
 
 # Cost Center Settings
 cost_centers:
@@ -25,17 +25,17 @@ cost_centers:
 # Teams Integration Configuration
 teams:
   # Enable teams-based cost center management
-  enabled: false
+  enabled: true
   
   # Scope: 'organization' (org-level teams) or 'enterprise' (enterprise-level teams)
-  scope: "enterprise"  # Options: "organization" or "enterprise"
+  scope: "organization"  # Options: "organization" or "enterprise"
   
   # Mode: 'auto' (one cost center per team) or 'manual' (use mappings below)
-  mode: "auto"  # Options: "auto" or "manual"
+  mode: "manual"  # Options: "auto" or "manual"
   
   # Organizations to query for teams (only used when scope is 'organization')
   organizations:
-    # - "your-org-name"
+    - "EficodeDemoOrg"
   
   # Auto-creation settings for teams mode
   auto_create_cost_centers: true  # Automatically create cost centers for teams
@@ -49,7 +49,8 @@ teams:
   
   # Manual team-to-cost-center mappings (only used when mode is 'manual')
   # Format: "org/team-slug": "cost_center_id" or "cost_center_name" (if auto_create enabled)
-  team_mappings: {}
+  team_mappings:
+    "EficodeDemoOrg/sustainet": "sustainet"
     # "my-org/frontend-team": "CC-FRONTEND-001"
     # "my-org/backend-team": "CC-BACKEND-001"
 

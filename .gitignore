@@ -94,6 +94,9 @@ exports/*
 # Ensure sensitive files are never committed
 .env
 !.env.example
+!config.example.yaml
+config/config.yaml
+config/config.yml
 
 # Temporary files
 tmp/
