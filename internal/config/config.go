@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,6 +83,8 @@ func Load(path string, logger *slog.Logger) (*Manager, error) {
 		logger = slog.Default()
 	}
 
+	loadDotEnv(path, logger)
+
 	m := &Manager{
 		path: path,
 		log:  logger,
@@ -106,6 +109,40 @@ func Load(path string, logger *slog.Logger) (*Manager, error) {
 	}
 
 	return m, nil
+}
+
+// loadDotEnv loads .env files if present, without overriding already-exported
+// environment variables. Precedence remains:
+//  1. existing process environment
+//  2. .env file values
+//  3. config YAML/defaults
+func loadDotEnv(configPath string, logger *slog.Logger) {
+	tryLoad := func(envPath string) bool {
+		if envPath == "" {
+			return false
+		}
+		if _, err := os.Stat(envPath); err != nil {
+			return false
+		}
+		if err := godotenv.Load(envPath); err != nil {
+			logger.Warn("Found .env but failed to load", "path", envPath, "error", err)
+			return false
+		}
+		logger.Debug("Loaded environment file", "path", envPath)
+		return true
+	}
+
+	// Try current working directory first (common local-dev pattern).
+	if tryLoad(".env") {
+		return
+	}
+
+	// Then try alongside config file and one level up (e.g. config/config.yaml -> .env at repo root).
+	configDir := filepath.Dir(configPath)
+	if tryLoad(filepath.Join(configDir, ".env")) {
+		return
+	}
+	_ = tryLoad(filepath.Join(configDir, "..", ".env"))
 }
 
 // Raw returns the underlying parsed Config struct.

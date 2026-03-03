@@ -119,6 +119,70 @@ github:
 	}
 }
 
+func TestLoad_DotEnvLoadsWhenEnvMissing(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+
+	if err := os.WriteFile(filepath.Join(tmp, ".env"), []byte("GITHUB_ENTERPRISE=dotenv-ent\n"), 0o644); err != nil {
+		t.Fatalf("writing .env: %v", err)
+	}
+
+	yaml := `
+github:
+  enterprise: ""
+`
+	if err := os.Unsetenv("GITHUB_ENTERPRISE"); err != nil {
+		t.Fatalf("unset env: %v", err)
+	}
+	m, err := Load(writeConfig(t, yaml), logger())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if m.Enterprise != "dotenv-ent" {
+		t.Errorf("enterprise = %q, want %q", m.Enterprise, "dotenv-ent")
+	}
+}
+
+func TestLoad_ExistingEnvBeatsDotEnv(t *testing.T) {
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+
+	if err := os.WriteFile(filepath.Join(tmp, ".env"), []byte("GITHUB_ENTERPRISE=dotenv-ent\n"), 0o644); err != nil {
+		t.Fatalf("writing .env: %v", err)
+	}
+
+	yaml := `
+github:
+  enterprise: "yaml-ent"
+`
+	t.Setenv("GITHUB_ENTERPRISE", "session-ent")
+	m, err := Load(writeConfig(t, yaml), logger())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if m.Enterprise != "session-ent" {
+		t.Errorf("enterprise = %q, want %q", m.Enterprise, "session-ent")
+	}
+}
+
 // ---------- Backward-compatible fallback chains ----------
 
 func TestLoad_FallbackChains(t *testing.T) {
