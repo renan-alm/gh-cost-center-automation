@@ -5,30 +5,360 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
-  release:
+  validate:
+    name: Pre-Release Validation
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
-      - name: Generate CHANGELOG
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Get previous tag
+        id: prev_tag
         run: |
-          git log --pretty=format:'* %s' > CHANGELOG.md
+          set -euo pipefail
+          CURRENT_TAG="v${{ steps.version.outputs.version }}"
+          echo "📌 Current tag: $CURRENT_TAG"
+          
+          # Get the tag before the current one by excluding it from the sorted list
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${CURRENT_TAG}$" | head -1)
+          
+          if [ -z "$PREV_TAG" ]; then
+            # No previous tag found - this is the first release
+            # Use CHANGELOG.md for version 2.0.0 content
+            echo "📌 No previous tag found, will use CHANGELOG.md content for v2.0.0"
+            echo "prev_tag=" >> $GITHUB_OUTPUT
+          else
+            echo "📌 Previous tag: $PREV_TAG"
+            echo "prev_tag=$PREV_TAG" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Create Release
-        id: create_release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag: ${{ github.ref }}
-          release_notes: ${{ github.event.release.body }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate and update CHANGELOG
+        run: |
+          set -e
+          VERSION=${{ steps.version.outputs.version }}
+          PREV_TAG=${{ steps.prev_tag.outputs.prev_tag }}
+          CURRENT_TAG="v$VERSION"
+          DATE=$(date -u +%Y-%m-%d)
+          
+          if [ -z "$PREV_TAG" ]; then
+            # First release - extract content from existing CHANGELOG.md for version 2.0.0
+            echo "📝 First release - using CHANGELOG.md content for v$VERSION"
+            
+            if [ "$VERSION" = "2.0.0" ] && [ -f CHANGELOG.md ]; then
+              # Extract the 2.0.0 section from CHANGELOG.md
+              echo "Extracting v2.0.0 content from CHANGELOG.md"
+              
+              # Find the line number where [2.0.0] starts
+              START_LINE=$(grep -n "^## \[2.0.0\]" CHANGELOG.md | cut -d: -f1)
+              
+              if [ -n "$START_LINE" ]; then
+                # Find the next version section (if exists)
+                NEXT_SECTION=$(tail -n +"$((START_LINE + 1))" CHANGELOG.md | grep -n "^## \[" | head -1 | cut -d: -f1)
+                
+                if [ -n "$NEXT_SECTION" ]; then
+                  END_LINE=$((START_LINE + NEXT_SECTION - 1))
+                  sed -n "${START_LINE},${END_LINE}p" CHANGELOG.md > /tmp/new_entry.txt
+                else
+                  # No next section, take until end of file
+                  sed -n "${START_LINE},\$p" CHANGELOG.md > /tmp/new_entry.txt
+                fi
+              else
+                echo "⚠️ Could not find [2.0.0] section in CHANGELOG.md"
+                echo "## [$VERSION] - $DATE" > /tmp/new_entry.txt
+                echo "" >> /tmp/new_entry.txt
+                echo "### Other" >> /tmp/new_entry.txt
+                echo "" >> /tmp/new_entry.txt
+                echo "- Release $VERSION" >> /tmp/new_entry.txt
+                echo "" >> /tmp/new_entry.txt
+              fi
+            else
+              echo "## [$VERSION] - $DATE" > /tmp/new_entry.txt
+              echo "" >> /tmp/new_entry.txt
+              echo "### Other" >> /tmp/new_entry.txt
+              echo "" >> /tmp/new_entry.txt
+              echo "- Release $VERSION" >> /tmp/new_entry.txt
+              echo "" >> /tmp/new_entry.txt
+            fi
+          else
+            # Generate changelog from commits since previous tag
+            echo "📝 Generating changelog for $PREV_TAG..$CURRENT_TAG"
+            
+            # Categorize commits by type
+            > /tmp/added.txt
+            > /tmp/changed.txt
+            > /tmp/fixed.txt
+            > /tmp/other.txt
+            > /tmp/processed_messages.txt
+            
+            # Function to categorize a single line
+            categorize_line() {
+              local line="$1"
+              local hash="$2"
+              
+              # Skip empty lines
+              [ -z "$line" ] && return
+              
+              # Skip if already processed (dedup)
+              if grep -qFx "$line" /tmp/processed_messages.txt 2>/dev/null; then
+                return
+              fi
+              echo "$line" >> /tmp/processed_messages.txt
+              
+              # Extract message without the prefix for cleaner output
+              clean_msg=$(echo "$line" | sed -E 's/^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]*\))?!?:\s*//')
+              
+              # Add hash if provided and not already in message
+              if [ -n "$hash" ] && ! echo "$clean_msg" | grep -qE '\([a-f0-9]+\)$'; then
+                clean_msg="$clean_msg ($hash)"
+              fi
+              
+              if echo "$line" | grep -qE '^feat(\([^)]*\))?!?:'; then
+                echo "- $clean_msg" >> /tmp/added.txt
+              elif echo "$line" | grep -qE '^fix(\([^)]*\))?!?:'; then
+                echo "- $clean_msg" >> /tmp/fixed.txt
+              elif echo "$line" | grep -qE '^(refactor|perf|build|ci|style)(\([^)]*\))?!?:'; then
+                echo "- $clean_msg" >> /tmp/changed.txt
+              elif echo "$line" | grep -qE '^(docs|test|chore)(\([^)]*\))?!?:'; then
+                # Skip docs, test, chore commits from changelog
+                return
+              else
+                # Only add to "other" if it looks like a meaningful message (not a merge commit title)
+                if ! echo "$line" | grep -qE '^Merge (pull request|branch)'; then
+                  echo "- $clean_msg" >> /tmp/other.txt
+                fi
+              fi
+            }
+            
+            # Process all commits (including merge commits) with full body
+            # Use a unique delimiter that won't appear in commit messages
+            DELIM="---COMMIT_END---"
+            
+            git log --format="%H\n%s\n%b\n$DELIM" "$PREV_TAG".."$CURRENT_TAG" | while IFS= read -r hash; do
+              # Read subject line
+              IFS= read -r subject || true
+              
+              # Read body lines until delimiter
+              body=""
+              while IFS= read -r bodyline; do
+                [ "$bodyline" = "$DELIM" ] && break
+                body="$body$bodyline"$'\n'
+              done
+              
+              short_hash="${hash:0:7}"
+              
+              # First, check if the subject itself is a conventional commit
+              if echo "$subject" | grep -qE '^(feat|fix|refactor|perf|build|ci|style|docs|test|chore|revert)(\([^)]*\))?!?:'; then
+                categorize_line "$subject" "$short_hash"
+              else
+                # Check for conventional commits in the body (e.g., squash merge descriptions)
+                found_in_body=false
+                echo "$body" | while IFS= read -r line; do
+                  # Look for lines starting with conventional commit prefixes
+                  if echo "$line" | grep -qE '^\* (feat|fix|refactor|perf|build|ci|style|docs|test|chore|revert)(\([^)]*\))?!?:'; then
+                    # Remove the leading "* " from squash merge format
+                    clean_line=$(echo "$line" | sed 's/^\* //')
+                    categorize_line "$clean_line" "$short_hash"
+                    found_in_body=true
+                  elif echo "$line" | grep -qE '^(feat|fix|refactor|perf|build|ci|style|docs|test|chore|revert)(\([^)]*\))?!?:'; then
+                    categorize_line "$line" "$short_hash"
+                    found_in_body=true
+                  fi
+                done
+                
+                # If nothing found in body and subject isn't a merge commit, add subject to other
+                if [ "$found_in_body" = false ] && ! echo "$subject" | grep -qE '^Merge (pull request|branch)'; then
+                  categorize_line "$subject" "$short_hash"
+                fi
+              fi
+            done
+            
+            # Check if any commits were found
+            if [ ! -s /tmp/added.txt ] && [ ! -s /tmp/changed.txt ] && [ ! -s /tmp/fixed.txt ] && [ ! -s /tmp/other.txt ]; then
+              echo "⚠️ No categorizable commits found between $PREV_TAG and $CURRENT_TAG"
+              echo "- Release $VERSION" > /tmp/other.txt
+            fi
+            
+            # Create the new changelog entry file
+            echo "## [$VERSION] - $DATE" > /tmp/new_entry.txt
+            
+            if [ -s /tmp/added.txt ]; then
+              echo "" >> /tmp/new_entry.txt
+              echo "### Added" >> /tmp/new_entry.txt
+              echo "" >> /tmp/new_entry.txt
+              cat /tmp/added.txt >> /tmp/new_entry.txt
+            fi
+            
+            if [ -s /tmp/changed.txt ]; then
+              echo "" >> /tmp/new_entry.txt
+              echo "### Changed" >> /tmp/new_entry.txt
+              echo "" >> /tmp/new_entry.txt
+              cat /tmp/changed.txt >> /tmp/new_entry.txt
+            fi
+            
+            if [ -s /tmp/fixed.txt ]; then
+              echo "" >> /tmp/new_entry.txt
+              echo "### Fixed" >> /tmp/new_entry.txt
+              echo "" >> /tmp/new_entry.txt
+              cat /tmp/fixed.txt >> /tmp/new_entry.txt
+            fi
+            
+            if [ -s /tmp/other.txt ]; then
+              echo "" >> /tmp/new_entry.txt
+              echo "### Other" >> /tmp/new_entry.txt
+              echo "" >> /tmp/new_entry.txt
+              cat /tmp/other.txt >> /tmp/new_entry.txt
+            fi
+            
+            echo "" >> /tmp/new_entry.txt
+            
+            # Find insertion point (after [Unreleased] section or after header)
+            if grep -n "^## \[Unreleased\]" CHANGELOG.md > /dev/null; then
+              # Find the next ## heading after [Unreleased]
+              UNRELEASED_LINE=$(grep -n "^## \[Unreleased\]" CHANGELOG.md | cut -d: -f1)
+              NEXT_SECTION=$(tail -n +"$((UNRELEASED_LINE + 1))" CHANGELOG.md | grep -n "^## \[" | head -1 | cut -d: -f1)
+              
+              if [ -n "$NEXT_SECTION" ]; then
+                INSERT_LINE=$((UNRELEASED_LINE + NEXT_SECTION))
+              else
+                # No next section, append at end
+                INSERT_LINE=$(wc -l < CHANGELOG.md)
+              fi
+            else
+              # No [Unreleased] section; insert at the first section heading, or end of file if none
+              FIRST_SECTION_LINE=$(grep -n "^## " CHANGELOG.md | head -1 | cut -d: -f1 || true)
+              if [ -n "$FIRST_SECTION_LINE" ]; then
+                INSERT_LINE=$FIRST_SECTION_LINE
+              else
+                INSERT_LINE=$(wc -l < CHANGELOG.md)
+              fi
+            fi
+            
+            # Reconstruct the file
+            TOTAL_LINES=$(wc -l < CHANGELOG.md)
+            if [ "$INSERT_LINE" -lt "$TOTAL_LINES" ]; then
+              # Insert within the file: take content up to INSERT_LINE, then new entry, then the rest
+              head -n "$INSERT_LINE" CHANGELOG.md > /tmp/changelog_new.md
+              cat /tmp/new_entry.txt >> /tmp/changelog_new.md
+              tail -n +"$((INSERT_LINE + 1))" CHANGELOG.md >> /tmp/changelog_new.md
+            else
+              # INSERT_LINE is at or beyond the end: append new entry after existing content
+              cat CHANGELOG.md > /tmp/changelog_new.md
+              cat /tmp/new_entry.txt >> /tmp/changelog_new.md
+            fi
+            mv /tmp/changelog_new.md CHANGELOG.md
+          fi
+          
+          echo "✅ Changelog updated for version $VERSION"
+          echo "--- Preview ---"
+          head -40 CHANGELOG.md
+          
+          # Save the new entry for release notes (remove the version header for cleaner notes)
+          tail -n +2 /tmp/new_entry.txt > /tmp/release_notes.md
+          echo "--- Release Notes ---"
+          cat /tmp/release_notes.md
 
-      - name: Upload Binaries
-        uses: softprops/action-gh-release@v1
+      - name: Upload release notes artifact
+        uses: actions/upload-artifact@v6
         with:
-          tag: ${{ github.ref }}
-          files: path/to/binaries/*  # Replace with actual binary paths
+          name: release-notes
+          path: /tmp/release_notes.md
+          retention-days: 1
+
+      - name: Commit and push CHANGELOG
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --cached --quiet -- CHANGELOG.md; then
+            echo "No changes to commit"
+          else
+            git commit -m "docs: update CHANGELOG for v${{ steps.version.outputs.version }}"
+            git push origin HEAD:main
+          fi
+
+      - name: Verify tests passed on main
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runs = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'ci.yml',
+              branch: 'main',
+              status: 'completed',
+              per_page: 1
+            });
+            
+            if (runs.data.workflow_runs.length === 0) {
+              core.setFailed('No CI workflow runs found on main branch!');
+              return;
+            }
+            
+            const latestRun = runs.data.workflow_runs[0];
+            console.log(`Latest CI run: ${latestRun.html_url}`);
+            console.log(`Status: ${latestRun.conclusion}`);
+            
+            if (latestRun.conclusion !== 'success') {
+              core.setFailed(`Latest CI on main did not pass (status: ${latestRun.conclusion}). Please fix tests before releasing.`);
+            } else {
+              console.log('✅ Tests passed on main');
+            }
+
+  release:
+    name: Build and Release
+    runs-on: ${{ matrix.os }}
+    needs: [validate]
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-14
+            platform: darwin-arm64
+          - os: windows-latest
+            platform: windows
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Build and publish extension
+        uses: cli/gh-extension-precompile@v2
+
+      - name: Download release notes
+        uses: actions/download-artifact@v7
+        with:
+          name: release-notes
+          path: /tmp
+        if: matrix.platform == 'linux'
+
+      - name: Update release notes
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${GITHUB_REF#refs/tags/}"
+          if [ -f /tmp/release_notes.md ]; then
+            gh release edit "$TAG_NAME" --notes-file /tmp/release_notes.md
+            echo "✅ Release notes updated for $TAG_NAME"
+          else
+            echo "⚠️ No release notes file found"
+          fi
+        if: matrix.platform == 'linux'
