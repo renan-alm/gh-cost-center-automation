@@ -3,12 +3,13 @@ package config
 
 // Config is the top-level configuration structure that mirrors the YAML file.
 type Config struct {
-	GitHub      GitHubConfig      `yaml:"github"`
-	Logging     LoggingConfig     `yaml:"logging"`
-	CostCenters CostCentersConfig `yaml:"cost_centers"`
-	Teams       TeamsConfig       `yaml:"teams"`
-	Budgets     BudgetsConfig     `yaml:"budgets"`
-	ExportDir   string            `yaml:"export_dir"`
+	GitHub                    GitHubConfig               `yaml:"github"`
+	Logging                   LoggingConfig              `yaml:"logging"`
+	CostCenters               CostCentersConfig          `yaml:"cost_centers"`
+	Teams                     TeamsConfig                `yaml:"teams"`
+	Budgets                   BudgetsConfig              `yaml:"budgets"`
+	ExportDir                 string                     `yaml:"export_dir"`
+	CustomPropertyCostCenters []CustomPropertyCostCenter `yaml:"cost-centers"`
 }
 
 // GitHubConfig holds GitHub-related settings.
@@ -34,6 +35,23 @@ type ExplicitMapping struct {
 	CostCenter     string   `yaml:"cost_center"`
 	PropertyName   string   `yaml:"property_name"`
 	PropertyValues []string `yaml:"property_values"`
+}
+
+// CustomPropertyCostCenter defines a cost center discovered via GitHub custom
+// property filters.  A repository is included in the cost center when it
+// satisfies ALL filters (AND logic).  Use separate cost-center entries when
+// OR logic across different property combinations is required.
+type CustomPropertyCostCenter struct {
+	Name    string                 `yaml:"name"`
+	Type    string                 `yaml:"type"` // must be "custom-property"
+	Filters []CustomPropertyFilter `yaml:"filters"`
+}
+
+// CustomPropertyFilter is a single property=value predicate applied during
+// repository discovery.
+type CustomPropertyFilter struct {
+	Property string `yaml:"property"`
+	Value    string `yaml:"value"`
 }
 
 // LoggingConfig controls log level and output file.

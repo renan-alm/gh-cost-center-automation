@@ -412,6 +412,8 @@ func runTeamsAssign(_ *cobra.Command) error {
 }
 
 // runRepoAssign implements the repository-based assignment flow.
+// It handles both explicit-mapping mode and custom-property discovery mode,
+// and can run both if both are configured.
 func runRepoAssign(_ *cobra.Command) error {
 	logger := slog.Default()
 
@@ -428,24 +430,14 @@ func runRepoAssign(_ *cobra.Command) error {
 	}
 	attachCache(client, logger)
 
-	// Initialize repository manager.
-	mgr, err := repository.NewManager(cfgManager, client, logger)
-	if err != nil {
-		return fmt.Errorf("initializing repository manager: %w", err)
+	hasExplicitMappings := cfgManager.RepositoryConfig != nil && len(cfgManager.RepositoryConfig.ExplicitMappings) > 0
+	hasCustomProperties := len(cfgManager.CustomPropertyCostCenters) > 0
+
+	if !hasExplicitMappings && !hasCustomProperties {
+		return fmt.Errorf("repository mode requires either explicit_mappings (under github.cost_centers.repository_config) or custom-property cost centers (under cost-centers) in config")
 	}
 
-	// Validate configuration.
-	if issues := mgr.ValidateConfiguration(); len(issues) > 0 {
-		for _, issue := range issues {
-			logger.Error("Configuration issue", "detail", issue)
-		}
-		return fmt.Errorf("invalid repository configuration: %d issues found", len(issues))
-	}
-
-	// Show config summary.
-	mgr.PrintConfigSummary(org)
-
-	// Confirmation in apply mode.
+	// Confirmation in apply mode (once, before any operations).
 	if assignMode == "apply" && !assignYes {
 		fmt.Print("\nProceed with APPLY? Type 'apply' to continue: ")
 		scanner := bufio.NewScanner(os.Stdin)
@@ -457,16 +449,56 @@ func runRepoAssign(_ *cobra.Command) error {
 		}
 	}
 
-	// Run assignment.
-	createBudgets := assignCreateBudgets && cfgManager.BudgetsEnabled
-	summary, err := mgr.Run(org, assignMode, createBudgets)
-	if err != nil {
-		return fmt.Errorf("repository assignment failed: %w", err)
+	// --- Explicit-mapping mode ---
+	if hasExplicitMappings {
+		mgr, err := repository.NewManager(cfgManager, client, logger)
+		if err != nil {
+			return fmt.Errorf("initializing repository manager: %w", err)
+		}
+
+		if issues := mgr.ValidateConfiguration(); len(issues) > 0 {
+			for _, issue := range issues {
+				logger.Error("Configuration issue", "detail", issue)
+			}
+			return fmt.Errorf("invalid repository configuration: %d issues found", len(issues))
+		}
+
+		mgr.PrintConfigSummary(org)
+
+		createBudgets := assignCreateBudgets && cfgManager.BudgetsEnabled
+		summary, err := mgr.Run(org, assignMode, createBudgets)
+		if err != nil {
+			return fmt.Errorf("repository assignment (explicit mappings) failed: %w", err)
+		}
+		if summary != nil {
+			summary.Print()
+		}
 	}
 
-	// Print summary.
-	if summary != nil {
-		summary.Print()
+	// --- Custom-property mode ---
+	if hasCustomProperties {
+		cpMgr, err := repository.NewCustomPropertyManager(cfgManager, client, logger)
+		if err != nil {
+			return fmt.Errorf("initializing custom-property manager: %w", err)
+		}
+
+		if issues := cpMgr.ValidateConfiguration(); len(issues) > 0 {
+			for _, issue := range issues {
+				logger.Error("Custom-property configuration issue", "detail", issue)
+			}
+			return fmt.Errorf("invalid custom-property configuration: %d issues found", len(issues))
+		}
+
+		cpMgr.PrintConfigSummary(org)
+
+		createBudgets := assignCreateBudgets && cfgManager.BudgetsEnabled
+		cpSummary, err := cpMgr.Run(org, assignMode, createBudgets)
+		if err != nil {
+			return fmt.Errorf("custom-property assignment failed: %w", err)
+		}
+		if cpSummary != nil {
+			cpSummary.Print()
+		}
 	}
 
 	logger.Info("Repository assign command completed successfully")

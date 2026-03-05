@@ -337,6 +337,200 @@ func TestValidateRepositoryConfig(t *testing.T) {
 	}
 }
 
+// ---------- Custom-property cost centers ----------
+
+func TestLoad_CustomPropertyCostCenters(t *testing.T) {
+	yaml := `
+github:
+  enterprise: "ent"
+cost-centers:
+  - name: "Backend Engineering"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+      - property: "cost-center-id"
+        value: "CC-1234"
+  - name: "Frontend Engineering"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "frontend"
+`
+	m, err := Load(writeConfig(t, yaml), logger())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(m.CustomPropertyCostCenters) != 2 {
+		t.Fatalf("expected 2 custom-property cost centers, got %d", len(m.CustomPropertyCostCenters))
+	}
+
+	backend := m.CustomPropertyCostCenters[0]
+	if backend.Name != "Backend Engineering" {
+		t.Errorf("name = %q", backend.Name)
+	}
+	if backend.Type != "custom-property" {
+		t.Errorf("type = %q", backend.Type)
+	}
+	if len(backend.Filters) != 2 {
+		t.Fatalf("expected 2 filters, got %d", len(backend.Filters))
+	}
+	if backend.Filters[0].Property != "team" || backend.Filters[0].Value != "backend" {
+		t.Errorf("filter[0] = {%q, %q}", backend.Filters[0].Property, backend.Filters[0].Value)
+	}
+	if backend.Filters[1].Property != "cost-center-id" || backend.Filters[1].Value != "CC-1234" {
+		t.Errorf("filter[1] = {%q, %q}", backend.Filters[1].Property, backend.Filters[1].Value)
+	}
+}
+
+func TestLoad_CustomPropertyCostCenters_InvalidType(t *testing.T) {
+	yaml := `
+github:
+  enterprise: "ent"
+cost-centers:
+  - name: "Backend"
+    type: "teams"
+    filters:
+      - property: "team"
+        value: "backend"
+`
+	_, err := Load(writeConfig(t, yaml), logger())
+	if err == nil {
+		t.Fatal("expected error for unsupported type")
+	}
+}
+
+func TestLoad_CustomPropertyCostCenters_MissingName(t *testing.T) {
+	yaml := `
+github:
+  enterprise: "ent"
+cost-centers:
+  - name: ""
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+`
+	_, err := Load(writeConfig(t, yaml), logger())
+	if err == nil {
+		t.Fatal("expected error for missing name")
+	}
+}
+
+func TestLoad_CustomPropertyCostCenters_NoFilters(t *testing.T) {
+	yaml := `
+github:
+  enterprise: "ent"
+cost-centers:
+  - name: "Backend"
+    type: "custom-property"
+    filters: []
+`
+	_, err := Load(writeConfig(t, yaml), logger())
+	if err == nil {
+		t.Fatal("expected error for empty filters")
+	}
+}
+
+func TestLoad_CustomPropertyCostCenters_DuplicateName(t *testing.T) {
+	yaml := `
+github:
+  enterprise: "ent"
+cost-centers:
+  - name: "Backend"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+  - name: "Backend"
+    type: "custom-property"
+    filters:
+      - property: "env"
+        value: "prod"
+`
+	_, err := Load(writeConfig(t, yaml), logger())
+	if err == nil {
+		t.Fatal("expected error for duplicate name")
+	}
+}
+
+func TestLoad_CustomPropertyAndRepositoryModeCoexist(t *testing.T) {
+	yaml := `
+github:
+  enterprise: "ent"
+  cost_centers:
+    mode: "repository"
+    repository_config:
+      explicit_mappings:
+        - cost_center: "Platform"
+          property_name: "team"
+          property_values:
+            - "platform"
+cost-centers:
+  - name: "Backend"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+`
+	m, err := Load(writeConfig(t, yaml), logger())
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if m.RepositoryConfig == nil {
+		t.Error("expected RepositoryConfig to be set")
+	}
+	if len(m.CustomPropertyCostCenters) != 1 {
+		t.Errorf("expected 1 custom-property cost center, got %d", len(m.CustomPropertyCostCenters))
+	}
+}
+
+func TestValidateCustomPropertyCostCenters_Valid(t *testing.T) {
+	entries := []CustomPropertyCostCenter{
+		{
+			Name: "Backend",
+			Type: "custom-property",
+			Filters: []CustomPropertyFilter{
+				{Property: "team", Value: "backend"},
+				{Property: "env", Value: "prod"},
+			},
+		},
+	}
+	if err := validateCustomPropertyCostCenters(entries); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateCustomPropertyCostCenters_MissingFilterProperty(t *testing.T) {
+	entries := []CustomPropertyCostCenter{
+		{
+			Name: "Backend",
+			Type: "custom-property",
+			Filters: []CustomPropertyFilter{
+				{Property: "", Value: "backend"},
+			},
+		},
+	}
+	if err := validateCustomPropertyCostCenters(entries); err == nil {
+		t.Fatal("expected error for missing filter property")
+	}
+}
+
+func TestValidateCustomPropertyCostCenters_MissingFilterValue(t *testing.T) {
+	entries := []CustomPropertyCostCenter{
+		{
+			Name: "Backend",
+			Type: "custom-property",
+			Filters: []CustomPropertyFilter{
+				{Property: "team", Value: ""},
+			},
+		},
+	}
+	if err := validateCustomPropertyCostCenters(entries); err == nil {
+		t.Fatal("expected error for missing filter value")
+	}
+}
+
 // ---------- Repository mode ----------
 
 func TestLoad_RepositoryMode(t *testing.T) {
