@@ -16,11 +16,13 @@ All examples use `--mode plan` (dry-run). Replace with `--mode apply --yes` when
 - [2. Teams-Based — Auto Mode](#2-teams-based--auto-mode)
 - [3. Teams-Based — Manual Mode](#3-teams-based--manual-mode)
 - [4. Repository-Based](#4-repository-based)
-- [5. Complex Scenarios](#5-complex-scenarios)
-  - [5a. Teams + Budgets + Auto-Create](#5a-teams--budgets--auto-create)
-  - [5b. Multi-Org Manual Teams Mapping](#5b-multi-org-manual-teams-mapping)
-  - [5c. Repository Mode with Multiple Properties](#5c-repository-mode-with-multiple-properties)
-  - [5d. GHE Data Resident / GHES with Teams](#5d-ghe-data-resident--ghes-with-teams)
+- [5. Custom-Property Cost Centers](#5-custom-property-cost-centers)
+- [6. Complex Scenarios](#6-complex-scenarios)
+  - [6a. Teams + Budgets + Auto-Create](#6a-teams--budgets--auto-create)
+  - [6b. Multi-Org Manual Teams Mapping](#6b-multi-org-manual-teams-mapping)
+  - [6c. Repository Mode with Multiple Properties](#6c-repository-mode-with-multiple-properties)
+  - [6d. Custom-Property with AND Filters + Budgets](#6d-custom-property-with-and-filters--budgets)
+  - [6e. GHE Data Resident / GHES with Teams](#6e-ghe-data-resident--ghes-with-teams)
 
 ---
 
@@ -181,9 +183,114 @@ gh cost-center assign --repo --mode plan
 
 ---
 
-## 5. Complex Scenarios
+## 5. Custom-Property Cost Centers
 
-### 5a. Teams + Budgets + Auto-Create
+Assign **repositories** to cost centers using fine-grained custom-property filters with **AND logic**. Unlike Repository Mode (section 4), which matches any value from a list (OR logic), custom-property cost centers require a repository to satisfy **every** filter simultaneously.
+
+> **Prerequisite:** Configure [custom properties](https://docs.github.com/en/organizations/managing-organization-settings/managing-custom-properties-for-repositories-in-your-organization) on your GitHub organization repositories first.
+
+### Config — Single Filter
+
+The simplest case: match repositories on a single custom property.
+
+```yaml
+github:
+  enterprise: "my-enterprise"
+
+teams:
+  organizations:
+    - "my-org"
+
+cost-centers:
+  - name: "Backend Engineering"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+
+  - name: "Frontend Engineering"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "frontend"
+
+  - name: "Data & ML"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "data"
+```
+
+### Config — Multiple Filters (AND Logic)
+
+Combine multiple filters in a single cost center entry. A repository must match **all** filters to be included:
+
+```yaml
+github:
+  enterprise: "my-enterprise"
+
+teams:
+  organizations:
+    - "my-org"
+
+cost-centers:
+  - name: "Production Backend"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+      - property: "environment"
+        value: "production"
+
+  - name: "Staging Backend"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+      - property: "environment"
+        value: "staging"
+
+  - name: "Production Frontend"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "frontend"
+      - property: "environment"
+        value: "production"
+```
+
+### Run
+
+```bash
+gh cost-center assign --repo --mode plan
+gh cost-center assign --repo --mode apply --yes
+```
+
+### What happens
+
+Given the multiple-filter config above:
+
+| Repository properties | Assigned to |
+|---|---|
+| `team=backend`, `environment=production` | Production Backend |
+| `team=backend`, `environment=staging` | Staging Backend |
+| `team=frontend`, `environment=production` | Production Frontend |
+| `team=frontend`, `environment=staging` | Skipped (no matching cost center) |
+| `team=backend` (no `environment`) | Skipped (missing required filter) |
+
+### Notes
+
+- All filters in a single cost center use **AND** logic — every filter must match.
+- For **OR** logic across different property combinations, add separate cost center entries.
+- Property names and values are **case-sensitive**.
+- Cost centers are auto-created if they don't exist.
+- This section uses the top-level `cost-centers` key, which can be used alongside or instead of `github.cost_centers.repository_config`.
+
+---
+
+## 6. Complex Scenarios
+
+### 6a. Teams + Budgets + Auto-Create
 
 Automatically create one cost center per team **and** provision Copilot and Actions budgets for each new cost center.
 
@@ -217,7 +324,7 @@ gh cost-center assign --teams --mode plan --create-cost-centers --create-budgets
 
 ---
 
-### 5b. Multi-Org Manual Teams Mapping
+### 6b. Multi-Org Manual Teams Mapping
 
 Your enterprise has multiple organizations and you want to map teams from each org to shared cost centers.
 
@@ -252,7 +359,7 @@ Users from both organizations are consolidated into shared cost centers (`CC-Eng
 
 ---
 
-### 5c. Repository Mode with Multiple Properties
+### 6c. Repository Mode with Multiple Properties
 
 Map repositories using different custom properties to different cost centers. For example, separate by both `team` and `environment`.
 
@@ -294,7 +401,63 @@ gh cost-center assign --repo --mode plan --create-cost-centers
 
 ---
 
-### 5d. GHE Data Resident / GHES with Teams
+### 6d. Custom-Property with AND Filters + Budgets
+
+Use custom-property cost centers with AND filters and automatic budget creation. Ideal for enterprises that track both team ownership and a billing code on each repository.
+
+```yaml
+github:
+  enterprise: "my-enterprise"
+
+teams:
+  organizations:
+    - "my-org"
+
+cost-centers:
+  - name: "CC-1234 — Backend"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "backend"
+      - property: "cost-center-id"
+        value: "CC-1234"
+
+  - name: "CC-5678 — Frontend"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "frontend"
+      - property: "cost-center-id"
+        value: "CC-5678"
+
+  - name: "CC-9999 — Data Platform"
+    type: "custom-property"
+    filters:
+      - property: "team"
+        value: "data"
+      - property: "cost-center-id"
+        value: "CC-9999"
+
+budgets:
+  enabled: true
+  products:
+    copilot:
+      amount: 300
+      enabled: true
+    actions:
+      amount: 200
+      enabled: true
+```
+
+```bash
+gh cost-center assign --repo --mode plan --create-cost-centers --create-budgets
+```
+
+Each cost center only includes repositories where **both** the `team` and `cost-center-id` properties match. Budgets are created for each new cost center.
+
+---
+
+### 6e. GHE Data Resident / GHES with Teams
 
 If your enterprise runs on GitHub Enterprise Data Resident or a self-hosted GitHub Enterprise Server, set `api_base_url` and use any mode as normal.
 

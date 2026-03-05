@@ -96,7 +96,7 @@ exports/*
 !.env.example
 !config.example.yaml
 config/config.yaml
-config/config.yml
+config/config-**
 
 # Temporary files
 tmp/
