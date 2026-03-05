@@ -1,5 +1,11 @@
 # gh-cost-center
 
+[![CI](https://github.com/renan-alm/gh-cost-center/actions/workflows/ci.yml/badge.svg)](https://github.com/renan-alm/gh-cost-center/actions/workflows/ci.yml)
+[![Release](https://github.com/renan-alm/gh-cost-center/actions/workflows/release.yml/badge.svg)](https://github.com/renan-alm/gh-cost-center/actions/workflows/release.yml)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/renan-alm/gh-cost-center)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/renan-alm/gh-cost-center)](https://github.com/renan-alm/gh-cost-center/releases/latest)
+
 A [GitHub CLI](https://cli.github.com/) extension to automate [GitHub Cost Center](https://docs.github.com/en/billing/concepts/cost-centers) creation and syncing for your enterprise.
 
 Originally based on [GitHub Cost Center Automation](https://github.com/github/cost-center-automation) project.
