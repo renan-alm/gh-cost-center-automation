@@ -72,6 +72,7 @@ type Manager struct {
 	LogLevel                        string
 	LogFile                         string
 	RepositoryConfig                *RepositoryConfig
+	CustomPropertyCostCenters       []CustomPropertyCostCenter
 	Token                           string // Explicit token from --token flag
 
 	timestampFile string
@@ -186,6 +187,16 @@ func (m *Manager) resolve() error {
 		}
 		m.RepositoryConfig = &rc
 		m.log.Info("Repository mode enabled", "mappings", len(rc.ExplicitMappings))
+	}
+
+	// --- Custom-property cost centers (independent of mode) ---
+	if len(m.cfg.CustomPropertyCostCenters) > 0 {
+		if err := validateCustomPropertyCostCenters(m.cfg.CustomPropertyCostCenters); err != nil {
+			return err
+		}
+		m.CustomPropertyCostCenters = m.cfg.CustomPropertyCostCenters
+		m.log.Info("Custom-property cost centers configured",
+			"count", len(m.CustomPropertyCostCenters))
 	}
 
 	// --- Cost centers (PRU-tier) with backward-compatible fallback chains ---
@@ -435,6 +446,36 @@ func validateRepositoryConfig(rc *RepositoryConfig) error {
 		if len(em.PropertyValues) == 0 {
 			return fmt.Errorf("explicit_mapping[%d]: missing 'property_values'", i)
 		}
+	}
+	return nil
+}
+
+// validateCustomPropertyCostCenters validates each entry in the cost-centers list.
+func validateCustomPropertyCostCenters(entries []CustomPropertyCostCenter) error {
+	seen := make(map[string]bool, len(entries))
+	for i, cc := range entries {
+		if cc.Name == "" {
+			return fmt.Errorf("cost-centers[%d]: missing 'name'", i)
+		}
+		if cc.Type != "custom-property" {
+			return fmt.Errorf("cost-centers[%d] (%q): unsupported type %q — only 'custom-property' is supported",
+				i, cc.Name, cc.Type)
+		}
+		if len(cc.Filters) == 0 {
+			return fmt.Errorf("cost-centers[%d] (%q): must have at least one filter", i, cc.Name)
+		}
+		for j, f := range cc.Filters {
+			if f.Property == "" {
+				return fmt.Errorf("cost-centers[%d] (%q) filter[%d]: missing 'property'", i, cc.Name, j)
+			}
+			if f.Value == "" {
+				return fmt.Errorf("cost-centers[%d] (%q) filter[%d]: missing 'value'", i, cc.Name, j)
+			}
+		}
+		if seen[cc.Name] {
+			return fmt.Errorf("cost-centers: duplicate name %q", cc.Name)
+		}
+		seen[cc.Name] = true
 	}
 	return nil
 }

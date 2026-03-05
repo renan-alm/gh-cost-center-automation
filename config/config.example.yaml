@@ -80,6 +80,34 @@ github:
       # - Repositories without the specified property will be skipped
       # - Property names and values are case-sensitive
 
+# ========================================
+# Custom-Property Cost Centers (Optional)
+# ========================================
+# Define cost centers by filtering repositories on GitHub custom properties.
+# All filters in a single cost center entry are combined with AND logic —
+# a repository must satisfy EVERY filter to be included.
+# For OR logic across different property combinations, add separate entries.
+#
+# Use this section alongside (or instead of) github.cost_centers.repository_config.
+# Activate with: gh cost-center assign --repo
+#
+# cost-centers:
+#   - name: "Backend Engineering"
+#     type: "custom-property"
+#     filters:
+#       - property: "team"
+#         value: "backend"
+#       - property: "cost-center-id"
+#         value: "CC-1234"
+#
+#   - name: "Frontend Engineering"
+#     type: "custom-property"
+#     filters:
+#       - property: "team"
+#         value: "frontend"
+#       - property: "cost-center-id"
+#         value: "CC-5678"
+
 # Logging Configuration
 logging:
   level: "INFO"
