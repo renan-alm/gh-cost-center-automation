@@ -293,10 +293,10 @@ func confirmApply(groups map[string][]string, checkCurrent bool) bool {
 		fmt.Printf("  - %s: %d users\n", ccID, len(usernames))
 	}
 
-	fmt.Print("\nProceed? Type 'apply' to continue: ")
+	fmt.Print("\nProceed? (yes/no): ")
 	scanner := bufio.NewScanner(os.Stdin)
 	if scanner.Scan() {
-		return strings.TrimSpace(strings.ToLower(scanner.Text())) == "apply"
+		return strings.TrimSpace(strings.ToLower(scanner.Text())) == "yes"
 	}
 	return false
 }
@@ -433,10 +433,10 @@ func runRepoAssign(_ *cobra.Command) error {
 
 	// Confirmation in apply mode.
 	if assignMode == "apply" && !assignYes {
-		fmt.Print("\nProceed with APPLY? Type 'apply' to continue: ")
+		fmt.Print("\nProceed with APPLY? (yes/no): ")
 		scanner := bufio.NewScanner(os.Stdin)
 		if scanner.Scan() {
-			if strings.TrimSpace(strings.ToLower(scanner.Text())) != "apply" {
+			if strings.TrimSpace(strings.ToLower(scanner.Text())) != "yes" {
 				logger.Warn("Aborted by user")
 				return nil
 			}
@@ -487,10 +487,10 @@ func runCustomPropAssign(_ *cobra.Command) error {
 
 	// Confirmation in apply mode.
 	if assignMode == "apply" && !assignYes {
-		fmt.Print("\nProceed with APPLY? Type 'apply' to continue: ")
+		fmt.Print("\nProceed with APPLY? (yes/no): ")
 		scanner := bufio.NewScanner(os.Stdin)
 		if scanner.Scan() {
-			if strings.TrimSpace(strings.ToLower(scanner.Text())) != "apply" {
+			if strings.TrimSpace(strings.ToLower(scanner.Text())) != "yes" {
 				logger.Warn("Aborted by user")
 				return nil
 			}
