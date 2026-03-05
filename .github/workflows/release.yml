@@ -32,7 +32,7 @@ jobs:
           echo "📌 Current tag: $CURRENT_TAG"
           
           # Get the tag before the current one by excluding it from the sorted list
-          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${CURRENT_TAG}$" | head -1)
+          PREV_TAG=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^${CURRENT_TAG}$" | head -1 || true)
           
           if [ -z "$PREV_TAG" ]; then
             # No previous tag found - this is the first release
@@ -335,13 +335,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-
       - name: Build and publish extension
         uses: cli/gh-extension-precompile@v2
+        with:
+          go_version_file: 'go.mod'
 
       - name: Download release notes
         uses: actions/download-artifact@v7
