@@ -55,10 +55,6 @@ type Manager struct {
 
 // NewManager creates a new teams manager from the resolved configuration.
 func NewManager(cfg *config.Manager, client *github.Client, logger *slog.Logger) *Manager {
-	concurrency := cfg.Concurrency
-	if concurrency <= 0 {
-		concurrency = defaultConcurrency
-	}
 	return &Manager{
 		cfg:          cfg,
 		client:       client,
@@ -69,7 +65,7 @@ func NewManager(cfg *config.Manager, client *github.Client, logger *slog.Logger)
 		autoCreate:   cfg.TeamsAutoCreate,
 		mappings:     cfg.TeamsMappings,
 		removeUsers:  cfg.TeamsRemoveUnmatchedUsers,
-		concurrency:  concurrency,
+		concurrency:  cfg.Concurrency,
 		teamsCache:   make(map[string][]github.Team),
 		membersCache: make(map[string][]string),
 		ccNameCache:  make(map[string]string),
@@ -329,11 +325,14 @@ func (m *Manager) BuildTeamAssignments() (map[string][]UserAssignment, error) {
 	}
 
 	results := make([]fetchResult, len(jobs))
-	sem := make(chan struct{}, m.concurrency)
+	concurrency := m.concurrency
+	if concurrency <= 0 {
+		concurrency = defaultConcurrency
+	}
+	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
 	for _, job := range jobs {
-		job := job // capture loop variable
 		wg.Add(1)
 		sem <- struct{}{} // acquire slot
 		go func() {

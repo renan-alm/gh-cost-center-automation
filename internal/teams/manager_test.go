@@ -587,8 +587,8 @@ func TestNewManager_ConcurrencyFromConfig(t *testing.T) {
 	}
 }
 
-// TestNewManager_DefaultConcurrency verifies that a zero Concurrency in config
-// falls back to defaultConcurrency.
+// TestNewManager_DefaultConcurrency verifies that when config.Concurrency is
+// at its default resolved value, NewManager propagates it correctly.
 func TestNewManager_DefaultConcurrency(t *testing.T) {
 	logger := testLogger()
 	cfg := &config.Manager{
@@ -596,10 +596,10 @@ func TestNewManager_DefaultConcurrency(t *testing.T) {
 		TeamsStrategy: "auto",
 		Enterprise:    "ent",
 		TeamsMappings: map[string]string{},
-		Concurrency:   0, // should use default
+		Concurrency:   config.DefaultConcurrency,
 	}
 	mgr := NewManager(cfg, nil, logger)
-	if mgr.concurrency != defaultConcurrency {
-		t.Errorf("concurrency = %d, want %d", mgr.concurrency, defaultConcurrency)
+	if mgr.concurrency != config.DefaultConcurrency {
+		t.Errorf("concurrency = %d, want %d", mgr.concurrency, config.DefaultConcurrency)
 	}
 }
