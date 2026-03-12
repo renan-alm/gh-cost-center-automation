@@ -827,3 +827,122 @@ func TestGetOrgPropertySchema(t *testing.T) {
 		t.Errorf("first = %q", defs[0].PropertyName)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Rate-limit and secondary rate-limit tests
+// ---------------------------------------------------------------------------
+
+func TestRateLimitWait_RetryAfterTakesPrecedence(t *testing.T) {
+	c := &Client{log: testLogger()}
+
+	// Retry-After should win even when X-RateLimit-Reset is also present.
+	resetTime := time.Now().Add(60 * time.Second)
+	resp := &http.Response{Header: http.Header{
+		"Retry-After":       []string{"10"},
+		"X-Ratelimit-Reset": []string{strconv.FormatInt(resetTime.Unix(), 10)},
+	}}
+	wait := c.rateLimitWait(resp)
+	if wait != 10*time.Second {
+		t.Errorf("rateLimitWait = %v, want 10s (Retry-After takes precedence)", wait)
+	}
+}
+
+func TestRateLimitWait_RetryAfterOnly(t *testing.T) {
+	c := &Client{log: testLogger()}
+
+	resp := &http.Response{Header: http.Header{
+		"Retry-After": []string{"5"},
+	}}
+	wait := c.rateLimitWait(resp)
+	if wait != 5*time.Second {
+		t.Errorf("rateLimitWait = %v, want 5s", wait)
+	}
+}
+
+func TestRateLimitWait_RetryAfterInvalid(t *testing.T) {
+	c := &Client{log: testLogger()}
+
+	// Invalid Retry-After falls through to X-RateLimit-Reset.
+	resetTime := time.Now().Add(20 * time.Second)
+	resp := &http.Response{Header: http.Header{
+		"Retry-After":       []string{"not-a-number"},
+		"X-Ratelimit-Reset": []string{strconv.FormatInt(resetTime.Unix(), 10)},
+	}}
+	wait := c.rateLimitWait(resp)
+	if wait < 19*time.Second || wait > 23*time.Second {
+		t.Errorf("rateLimitWait = %v, expected ~21s (fallback to X-RateLimit-Reset)", wait)
+	}
+}
+
+func TestDoJSON_SecondaryRateLimit_403WithRetryAfter(t *testing.T) {
+	// GitHub sends 403 + Retry-After for secondary rate limits (abuse detection).
+	// The client should retry after the specified delay without counting the
+	// 403 against the retry budget.
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		if n <= 2 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("secondary rate limit"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	var resp map[string]string
+	if _, err := c.doJSON(http.MethodGet, srv.URL+"/test", nil, &resp); err != nil {
+		t.Fatalf("doJSON: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Errorf("status = %q", resp["status"])
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+func TestDoJSON_403WithoutRetryAfter_NonRetryable(t *testing.T) {
+	// A 403 without Retry-After is a plain authorization error and must NOT
+	// be retried.
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("forbidden"))
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	_, err := c.doJSON(http.MethodGet, srv.URL+"/test", nil, nil)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403 APIError, got %v", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1 (no retry for plain 403)", got)
+	}
+}
+
+func TestDoJSON_RateLimitRemainingWarn(t *testing.T) {
+	// A 2xx response with X-RateLimit-Remaining below the threshold should
+	// still succeed — the warning is informational only.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-RateLimit-Remaining", "5")
+		_ = json.NewEncoder(w).Encode(map[string]string{"ok": "true"})
+	}))
+	defer srv.Close()
+	c := newTestClient(t, srv.URL)
+	var resp map[string]string
+	if _, err := c.doJSON(http.MethodGet, srv.URL+"/test", nil, &resp); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp["ok"] != "true" {
+		t.Errorf("resp[ok] = %q", resp["ok"])
+	}
+}

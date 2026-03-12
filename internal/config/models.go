@@ -15,6 +15,9 @@ type GitHubConfig struct {
 	Enterprise    string   `yaml:"enterprise"`
 	APIBaseURL    string   `yaml:"api_base_url"`
 	Organizations []string `yaml:"organizations"`
+	// Concurrency controls the maximum number of concurrent GitHub API requests.
+	// Defaults to DefaultConcurrency when zero or negative.
+	Concurrency int `yaml:"concurrency"`
 }
 
 // CostCenterConfig holds the mode selector and per-mode settings.

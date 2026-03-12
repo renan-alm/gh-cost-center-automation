@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/renan-alm/gh-cost-center/internal/config"
@@ -537,5 +538,68 @@ func TestEnsureCostCentersExist_SpecialCharsInName(t *testing.T) {
 	}
 	if ccMap["42_Ölbrück-Straße"] != "uuid-xyz" {
 		t.Errorf("got %q, want uuid-xyz", ccMap["42_Ölbrück-Straße"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency tests
+// ---------------------------------------------------------------------------
+
+// TestFetchTeamMembers_Concurrent verifies that fetchTeamMembers is safe to
+// call from multiple goroutines at the same time (regression test for the
+// membersCache mutex).
+func TestFetchTeamMembers_Concurrent(t *testing.T) {
+	t.Parallel()
+	mgr := newTestManager("organization", "auto", []string{"org1"}, nil, false, false)
+	mgr.membersCache["org1/devs"] = []string{"alice", "bob"}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			members, err := mgr.fetchTeamMembers("org1", "devs")
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+			if len(members) != 2 {
+				t.Errorf("expected 2 members, got %d", len(members))
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// TestNewManager_ConcurrencyFromConfig verifies that NewManager reads the
+// concurrency setting from config and applies the default when not set.
+func TestNewManager_ConcurrencyFromConfig(t *testing.T) {
+	logger := testLogger()
+	cfg := &config.Manager{
+		TeamsScope:    "enterprise",
+		TeamsStrategy: "auto",
+		Enterprise:    "ent",
+		TeamsMappings: map[string]string{},
+		Concurrency:   10,
+	}
+	mgr := NewManager(cfg, nil, logger)
+	if mgr.concurrency != 10 {
+		t.Errorf("concurrency = %d, want 10", mgr.concurrency)
+	}
+}
+
+// TestNewManager_DefaultConcurrency verifies that a zero Concurrency in config
+// falls back to defaultConcurrency.
+func TestNewManager_DefaultConcurrency(t *testing.T) {
+	logger := testLogger()
+	cfg := &config.Manager{
+		TeamsScope:    "enterprise",
+		TeamsStrategy: "auto",
+		Enterprise:    "ent",
+		TeamsMappings: map[string]string{},
+		Concurrency:   0, // should use default
+	}
+	mgr := NewManager(cfg, nil, logger)
+	if mgr.concurrency != defaultConcurrency {
+		t.Errorf("concurrency = %d, want %d", mgr.concurrency, defaultConcurrency)
 	}
 }

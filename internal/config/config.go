@@ -28,6 +28,9 @@ const (
 	DefaultPRUsAllowedCCName = "01 - PRU overages allowed"
 	DefaultAPIBaseURL        = "https://api.github.com"
 
+	// DefaultConcurrency is the default number of concurrent GitHub API workers.
+	DefaultConcurrency = 5
+
 	timestampFileName = ".last_run_timestamp"
 )
 
@@ -90,6 +93,9 @@ type Manager struct {
 	ExportDir string
 	LogLevel  string
 	LogFile   string
+
+	// Concurrency limits the number of parallel GitHub API workers.
+	Concurrency int
 
 	// Token from --token flag.
 	Token string
@@ -190,6 +196,12 @@ func (m *Manager) resolve() error {
 	m.Organizations = m.cfg.GitHub.Organizations
 	if m.Organizations == nil {
 		m.Organizations = []string{}
+	}
+
+	// --- Concurrency ---
+	m.Concurrency = m.cfg.GitHub.Concurrency
+	if m.Concurrency <= 0 {
+		m.Concurrency = DefaultConcurrency
 	}
 
 	// --- Cost center mode ---

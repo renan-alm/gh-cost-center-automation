@@ -8,10 +8,15 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/renan-alm/gh-cost-center/internal/config"
 	"github.com/renan-alm/gh-cost-center/internal/github"
 )
+
+// defaultConcurrency is the number of concurrent worker goroutines used to
+// fetch team members when no value is provided via configuration.
+const defaultConcurrency = config.DefaultConcurrency
 
 // UserAssignment records the cost center assignment for a user found via a
 // team.  Only the final (last-team-wins) assignment is kept per user.
@@ -35,6 +40,7 @@ type Manager struct {
 	autoCreate  bool
 	mappings    map[string]string // team key -> CC name (manual mode)
 	removeUsers bool
+	concurrency int // max concurrent API workers for member fetching
 
 	// Budget creation support.
 	createBudgets  bool
@@ -43,11 +49,16 @@ type Manager struct {
 	// Caches populated during a run.
 	teamsCache   map[string][]github.Team // org/enterprise -> teams
 	membersCache map[string][]string      // team-key -> usernames
+	membersMu    sync.RWMutex             // protects membersCache for concurrent access
 	ccNameCache  map[string]string        // team-key -> CC name
 }
 
 // NewManager creates a new teams manager from the resolved configuration.
 func NewManager(cfg *config.Manager, client *github.Client, logger *slog.Logger) *Manager {
+	concurrency := cfg.Concurrency
+	if concurrency <= 0 {
+		concurrency = defaultConcurrency
+	}
 	return &Manager{
 		cfg:          cfg,
 		client:       client,
@@ -58,6 +69,7 @@ func NewManager(cfg *config.Manager, client *github.Client, logger *slog.Logger)
 		autoCreate:   cfg.TeamsAutoCreate,
 		mappings:     cfg.TeamsMappings,
 		removeUsers:  cfg.TeamsRemoveUnmatchedUsers,
+		concurrency:  concurrency,
 		teamsCache:   make(map[string][]github.Team),
 		membersCache: make(map[string][]string),
 		ccNameCache:  make(map[string]string),
@@ -142,6 +154,7 @@ func (m *Manager) fetchAllTeams() (map[string][]github.Team, error) {
 }
 
 // fetchTeamMembers fetches the members of a team, using an in-memory cache.
+// It is safe to call from multiple goroutines concurrently.
 func (m *Manager) fetchTeamMembers(orgOrEnterprise, teamSlug string) ([]string, error) {
 	var cacheKey string
 	if m.scope == "enterprise" {
@@ -150,7 +163,10 @@ func (m *Manager) fetchTeamMembers(orgOrEnterprise, teamSlug string) ([]string, 
 		cacheKey = orgOrEnterprise + "/" + teamSlug
 	}
 
-	if cached, ok := m.membersCache[cacheKey]; ok {
+	m.membersMu.RLock()
+	cached, ok := m.membersCache[cacheKey]
+	m.membersMu.RUnlock()
+	if ok {
 		return cached, nil
 	}
 
@@ -172,7 +188,9 @@ func (m *Manager) fetchTeamMembers(orgOrEnterprise, teamSlug string) ([]string, 
 		}
 	}
 
+	m.membersMu.Lock()
 	m.membersCache[cacheKey] = usernames
+	m.membersMu.Unlock()
 	return usernames, nil
 }
 
@@ -223,9 +241,15 @@ func (m *Manager) costCenterForTeam(orgOrEnterprise string, team github.Team) (s
 // centers.  Users can only belong to ONE cost center; if a user appears in
 // multiple teams the last-team-wins.
 //
+// Team members are fetched concurrently using a worker pool bounded by
+// m.concurrency.  Assignments are applied in a deterministic order (teams
+// sorted by org/enterprise key then by their position in the fetched slice),
+// so last-team-wins behaviour is stable across runs.
+//
 // Returns a map of costCenterName -> []UserAssignment.
 func (m *Manager) BuildTeamAssignments() (map[string][]UserAssignment, error) {
-	m.log.Info("Building team-based cost center assignments...")
+	m.log.Info("Building team-based cost center assignments...",
+		"concurrency", m.concurrency)
 
 	allTeams, err := m.fetchAllTeams()
 	if err != nil {
@@ -237,13 +261,26 @@ func (m *Manager) BuildTeamAssignments() (map[string][]UserAssignment, error) {
 		return nil, nil
 	}
 
-	// Track final assignment per user (last-team-wins).
-	userFinal := make(map[string]UserAssignment) // username -> assignment
+	// teamJob describes a single team whose members need to be fetched.
+	type teamJob struct {
+		idx            int
+		orgOrEnterprise string
+		team           github.Team
+		ccName         string
+		teamKey        string
+	}
 
-	// Track multi-team users for conflict reporting.
-	userTeamMap := make(map[string][]string) // username -> list of team keys
+	// Collect jobs in a stable, sorted order so that last-team-wins is
+	// deterministic regardless of map-iteration order.
+	orgKeys := make([]string, 0, len(allTeams))
+	for k := range allTeams {
+		orgKeys = append(orgKeys, k)
+	}
+	sort.Strings(orgKeys)
 
-	for orgOrEnterprise, teams := range allTeams {
+	var jobs []teamJob
+	for _, orgOrEnterprise := range orgKeys {
+		teams := allTeams[orgOrEnterprise]
 		sourceLabel := "organization"
 		if m.scope == "enterprise" {
 			sourceLabel = "enterprise"
@@ -260,16 +297,6 @@ func (m *Manager) BuildTeamAssignments() (map[string][]UserAssignment, error) {
 				continue
 			}
 
-			members, err := m.fetchTeamMembers(orgOrEnterprise, team.Slug)
-			if err != nil {
-				return nil, err
-			}
-
-			if len(members) == 0 {
-				m.log.Info("Team has no members, skipping", "team", team.Slug)
-				continue
-			}
-
 			var teamKey string
 			if m.scope == "enterprise" {
 				teamKey = team.Slug
@@ -277,23 +304,76 @@ func (m *Manager) BuildTeamAssignments() (map[string][]UserAssignment, error) {
 				teamKey = orgOrEnterprise + "/" + team.Slug
 			}
 
-			for _, username := range members {
-				userTeamMap[username] = append(userTeamMap[username], teamKey)
-				// Last-team-wins: overwrite any previous assignment.
-				userFinal[username] = UserAssignment{
-					Username:   username,
-					CostCenter: ccName,
-					Org:        orgOrEnterprise,
-					TeamSlug:   team.Slug,
-				}
-			}
-
-			m.log.Info("Team assignment",
-				"team", team.Name,
-				"key", teamKey,
-				"cost_center", ccName,
-				"members", len(members))
+			jobs = append(jobs, teamJob{
+				idx:            len(jobs),
+				orgOrEnterprise: orgOrEnterprise,
+				team:           team,
+				ccName:         ccName,
+				teamKey:        teamKey,
+			})
 		}
+	}
+
+	if len(jobs) == 0 {
+		m.log.Warn("No teams with cost center mappings found")
+		return nil, nil
+	}
+
+	// Fetch team members concurrently using a bounded worker pool.
+	// Each goroutine writes to its own slice index so no mutex is needed
+	// for the results slice itself.
+	type fetchResult struct {
+		job       teamJob
+		usernames []string
+		err       error
+	}
+
+	results := make([]fetchResult, len(jobs))
+	sem := make(chan struct{}, m.concurrency)
+	var wg sync.WaitGroup
+
+	for _, job := range jobs {
+		job := job // capture loop variable
+		wg.Add(1)
+		sem <- struct{}{} // acquire slot
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+			usernames, err := m.fetchTeamMembers(job.orgOrEnterprise, job.team.Slug)
+			results[job.idx] = fetchResult{job: job, usernames: usernames, err: err}
+		}()
+	}
+	wg.Wait()
+
+	// Apply results in job order (preserves last-job-wins for multi-team users).
+	userFinal := make(map[string]UserAssignment) // username -> assignment
+	userTeamMap := make(map[string][]string)      // username -> list of team keys
+
+	for _, r := range results {
+		if r.err != nil {
+			return nil, r.err
+		}
+		if len(r.usernames) == 0 {
+			m.log.Info("Team has no members, skipping", "team", r.job.team.Slug)
+			continue
+		}
+
+		for _, username := range r.usernames {
+			userTeamMap[username] = append(userTeamMap[username], r.job.teamKey)
+			// Last-team-wins: overwrite any previous assignment.
+			userFinal[username] = UserAssignment{
+				Username:   username,
+				CostCenter: r.job.ccName,
+				Org:        r.job.orgOrEnterprise,
+				TeamSlug:   r.job.team.Slug,
+			}
+		}
+
+		m.log.Info("Team assignment",
+			"team", r.job.team.Name,
+			"key", r.job.teamKey,
+			"cost_center", r.job.ccName,
+			"members", len(r.usernames))
 	}
 
 	// Report multi-team users.
@@ -335,6 +415,7 @@ func (m *Manager) BuildTeamAssignments() (map[string][]UserAssignment, error) {
 
 	return assignments, nil
 }
+
 
 // EnsureCostCentersExist ensures all required cost centers exist, creating
 // them if auto-create is enabled.  When auto-create is disabled, cost center
