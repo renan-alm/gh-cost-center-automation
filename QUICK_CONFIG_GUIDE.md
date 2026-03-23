@@ -159,7 +159,9 @@ cost_center:
       "my-org/backend": "CC-Backend"
 ```
 
-> **Note:** Mapping values should be the **display names** of existing cost centers (not UUIDs). The tool resolves them automatically. If a name contains special characters (e.g., ü, ö, ä), it works the same way — names are resolved before any API calls are made.
+> **Mapping values** accept either a **display name** or a **UUID**:
+> - **Name** (recommended): the tool looks up the name in the billing API and resolves it to a UUID automatically. Supports `auto_create: true`. Works with special characters (ü, ö, ä, etc.).
+> - **UUID**: used directly as the cost center ID — no API lookup performed. Useful when you already have the UUID from the GitHub billing settings and want to bypass name resolution.
 
 ---
 

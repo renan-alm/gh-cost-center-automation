@@ -539,3 +539,138 @@ func TestEnsureCostCentersExist_SpecialCharsInName(t *testing.T) {
 		t.Errorf("got %q, want uuid-xyz", ccMap["42_Ölbrück-Straße"])
 	}
 }
+
+// ---------------------------------------------------------------------------
+// UUID passthrough — mapping value is a UUID, not a cost center name.
+// Tests marked "FAIL before fix" are expected to fail until Phase 2 is applied.
+// ---------------------------------------------------------------------------
+
+// TestResolveCostCenters_UUIDPassthrough verifies that a UUID used as a
+// mapping value is accepted as a direct cost center ID without a name lookup
+// against the billing API.
+// FAIL before fix: returns error "cost center not found: <uuid>".
+func TestResolveCostCenters_UUIDPassthrough(t *testing.T) {
+	const knownUUID = "c7d76de8-950d-4072-894a-17e75a6e6857"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Active cost centers do NOT include the UUID as a name — correct,
+		// because the UUID is a cost center ID, not a display name.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"costCenters": []map[string]string{
+				{"id": "uuid-other", "name": "CC-Other", "state": "active"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClientFromURL(t, srv.URL)
+	// autoCreate=false routes through resolveCostCenters.
+	mgr := newTestManager("organization", "manual", []string{"org1"}, nil, false, false)
+	mgr.client = client
+
+	ccMap, _, err := mgr.EnsureCostCentersExist([]string{knownUUID})
+	if err != nil {
+		t.Fatalf("UUID mapping value should pass through as cost center ID, got error: %v", err)
+	}
+	if ccMap[knownUUID] != knownUUID {
+		t.Errorf("ccMap[uuid]: got %q, want %q (the UUID itself)", ccMap[knownUUID], knownUUID)
+	}
+}
+
+// TestResolveCostCenters_MixedUUIDAndName verifies that a UUID and a regular
+// name can coexist: UUID passes through directly, name is resolved via the API.
+// FAIL before fix: error because the UUID is treated as an unresolvable name.
+func TestResolveCostCenters_MixedUUIDAndName(t *testing.T) {
+	const knownUUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"costCenters": []map[string]string{
+				{"id": "uuid-named", "name": "CC-Named", "state": "active"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClientFromURL(t, srv.URL)
+	mgr := newTestManager("organization", "manual", []string{"org1"}, nil, false, false)
+	mgr.client = client
+
+	ccMap, _, err := mgr.EnsureCostCentersExist([]string{knownUUID, "CC-Named"})
+	if err != nil {
+		t.Fatalf("mixed UUID+name should succeed, got error: %v", err)
+	}
+	if ccMap[knownUUID] != knownUUID {
+		t.Errorf("UUID entry: got %q, want %q", ccMap[knownUUID], knownUUID)
+	}
+	if ccMap["CC-Named"] != "uuid-named" {
+		t.Errorf("named entry: got %q, want uuid-named", ccMap["CC-Named"])
+	}
+}
+
+// TestResolveCostCenters_NameNotFound verifies that an unresolvable plain name
+// still returns an actionable error. Regression guard — passes before and after.
+func TestResolveCostCenters_NameNotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"costCenters": []map[string]string{},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClientFromURL(t, srv.URL)
+	mgr := newTestManager("organization", "manual", []string{"org1"}, nil, false, false)
+	mgr.client = client
+
+	_, _, err := mgr.EnsureCostCentersExist([]string{"CC-Does-Not-Exist"})
+	if err == nil {
+		t.Fatal("expected error for unresolvable cost center name")
+	}
+	if !strings.Contains(err.Error(), "CC-Does-Not-Exist") {
+		t.Errorf("error should name the unresolved cost center, got: %v", err)
+	}
+}
+
+// TestEnsureCostCentersExist_UUIDPassthrough verifies that when auto_create is
+// enabled and a UUID is used as a mapping value, it is used as the cost center
+// ID directly and the create API endpoint is NOT called.
+// FAIL before fix: createCalled=true — code attempts to POST-create a CC whose
+// "name" is a UUID.
+func TestEnsureCostCentersExist_UUIDPassthrough(t *testing.T) {
+	const knownUUID = "c7d76de8-950d-4072-894a-17e75a6e6857"
+	createCalled := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			createCalled = true
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"message":"must not create a cost center from a UUID name"}`))
+			return
+		}
+		// GET cost-centers list — UUID is not present as a name.
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"costCenters": []map[string]string{},
+		})
+	}))
+	defer srv.Close()
+
+	client := newTestClientFromURL(t, srv.URL)
+	// autoCreate=true routes through EnsureCostCentersExist main path.
+	mgr := newTestManager("organization", "manual", []string{"org1"}, nil, true, false)
+	mgr.client = client
+
+	ccMap, _, err := mgr.EnsureCostCentersExist([]string{knownUUID})
+	if err != nil {
+		t.Fatalf("UUID value should pass through directly, got error: %v", err)
+	}
+	if createCalled {
+		t.Error("create API endpoint must not be called when mapping value is a UUID")
+	}
+	if ccMap[knownUUID] != knownUUID {
+		t.Errorf("ccMap[uuid]: got %q, want %q (the UUID itself)", ccMap[knownUUID], knownUUID)
+	}
+}

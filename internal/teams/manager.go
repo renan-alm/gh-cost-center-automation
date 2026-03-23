@@ -364,6 +364,14 @@ func (m *Manager) EnsureCostCentersExist(ccNames []string) (map[string]string, m
 	apiCalls := 0
 
 	for _, name := range ccNames {
+		// If the mapping value is already a UUID, use it directly — do not
+		// attempt to look it up by name or create a new cost center.
+		if github.IsValidCostCenterUUID(name) {
+			m.log.Debug("Mapping value is a UUID, using directly as cost center ID", "id", name)
+			ccMap[name] = name
+			preloadHits++
+			continue
+		}
 		if id, ok := activeMap[name]; ok {
 			ccMap[name] = id
 			preloadHits++
@@ -419,6 +427,14 @@ func (m *Manager) resolveCostCenters(ccNames []string) (map[string]string, map[s
 	var unresolved []string
 
 	for _, name := range ccNames {
+		// If the mapping value is already a UUID, use it directly as the
+		// cost center ID — no name lookup needed.  This honours the
+		// documented "cost-center-name-or-id" contract.
+		if github.IsValidCostCenterUUID(name) {
+			m.log.Debug("Mapping value is a UUID, using directly as cost center ID", "id", name)
+			ccMap[name] = name
+			continue
+		}
 		if id, ok := activeMap[name]; ok {
 			ccMap[name] = id
 			m.log.Debug("Resolved cost center", "name", name, "id", id)
@@ -475,7 +491,11 @@ func (m *Manager) SyncTeamAssignments(mode string, ignoreCurrentCC bool) (map[st
 				"error", err)
 			ccMap = make(map[string]string, len(ccNames))
 			for _, n := range ccNames {
-				ccMap[n] = n
+				if github.IsValidCostCenterUUID(n) {
+					ccMap[n] = n
+				} else {
+					ccMap[n] = n // name unresolved in plan mode; will be resolved on apply
+				}
 			}
 		}
 		newlyCreated = make(map[string]bool)

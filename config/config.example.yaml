@@ -97,6 +97,8 @@ cost_center:
   #
   #   # Manual team→cost-center mappings (only used when strategy is "manual")
   #   # Format: "org/team-slug": "cost-center-name-or-id"
+  #   #   Name: resolved to a UUID via the billing API; supports auto_create.
+  #   #   UUID: used directly as the cost center ID — no API lookup performed.
   #   mappings: {}
   #     # "my-org/frontend-team": "CC-FRONTEND-001"
   #     # "my-org/backend-team": "CC-BACKEND-001"
